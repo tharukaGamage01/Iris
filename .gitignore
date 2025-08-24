@@ -63,3 +63,4 @@ secrets.json
 # Images folder used for test data (uncomment if you want to track sample images)
 # photos/
 # img/
+facerec/models/facenet.onnx

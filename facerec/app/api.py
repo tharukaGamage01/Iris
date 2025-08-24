@@ -1,7 +1,6 @@
 import io, os, re, mimetypes, logging
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timezone
-
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query, Body
 from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
@@ -372,3 +371,33 @@ async def attendance_seen(payload: SeenPayload = Body(...)):
 
     att = _toggle_attendance_for_today(stu["id"], when)
     return {"ok": True, "student": {"id": stu["id"], "external_id": stu["external_id"], "name": stu["name"]}, "attendance": att}
+
+
+
+@app.get("/unknowns")
+async def get_unknowns(date: str = Query(None, description="YYYY-MM-DD (defaults to today)")):
+    """
+    Returns today's unknown detections as joined rows:
+      { data: [ { attendance: {..}, person: {..} }, ... ] }
+    """
+    if not supabase:
+        return {"data": []}
+    if not date:
+        date = datetime.now(timezone.utc).date().isoformat()
+    try:
+        att = supabase.table("unknown_attendance").select(
+            "id, unknown_id, date, status, check_in_at, check_out_at, last_seen_at, visits, snapshot_url"
+        ).eq("date", date).execute()
+        rows = att.data or []
+        out = []
+        for r in rows:
+            up = supabase.table("unknown_people").select(
+                "id, fingerprint, label, last_snapshot_url"
+            ).eq("id", r["unknown_id"]).limit(1).execute()
+            person = (up.data or [None])[0]
+            out.append({"attendance": r, "person": person})
+        return {"data": out}
+    except Exception as e:
+        # log if you have logging configured
+        return {"data": []}
+

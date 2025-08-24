@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   AppBar,
   Box,
@@ -16,6 +16,7 @@ import {
   Typography,
   useTheme,
   useMediaQuery,
+  Button,
 } from '@mui/material';
 import {
   Menu as MenuIcon,
@@ -24,7 +25,10 @@ import {
   PersonAdd as PersonAddIcon,
   QuestionMark as QuestionMarkIcon,
   Analytics as AnalyticsIcon,
+  Logout as LogoutIcon,
 } from '@mui/icons-material';
+import { useRouter } from 'next/navigation';
+import { supabase } from '@/lib/supabaseClient';
 
 const drawerWidth = 240;
 
@@ -46,18 +50,48 @@ export default function Layout({ children, activeTab, onTabChange }: LayoutProps
   const [mobileOpen, setMobileOpen] = useState(false);
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('md'));
+  const router = useRouter();
 
   const handleDrawerToggle = () => {
     setMobileOpen(!mobileOpen);
   };
 
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    router.replace('/auth/login');
+  };
+
+  const [userName, setUserName] = useState<string | null>(null);
+
+  useEffect(() => {
+    let mounted = true;
+    (async () => {
+      try {
+        const { data } = await supabase.auth.getUser();
+        const user = data?.user;
+        const name = user?.user_metadata?.full_name || user?.email || null;
+        if (mounted) setUserName(name);
+      } catch (e) {
+        // ignore
+      }
+    })();
+    return () => { mounted = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const drawer = (
     <Box sx={{ height: '100%', bgcolor: '#fafafa' }}>
       <Box sx={{ p: 3, borderBottom: '1px solid #e0e0e0' }}>
-        <Typography variant="h5" sx={{ color: 'primary.main', fontWeight: 'bold', textAlign: 'center' }}>
+        <Typography
+          variant="h5"
+          sx={{ color: 'primary.main', fontWeight: 'bold', textAlign: 'center' }}
+        >
           IRIS
         </Typography>
-        <Typography variant="body2" sx={{ color: 'text.secondary', textAlign: 'center', mt: 0.5 }}>
+        <Typography
+          variant="body2"
+          sx={{ color: 'text.secondary', textAlign: 'center', mt: 0.5 }}
+        >
           Attendance System
         </Typography>
       </Box>
@@ -85,7 +119,8 @@ export default function Layout({ children, activeTab, onTabChange }: LayoutProps
                   },
                 },
                 '&:hover': {
-                  backgroundColor: activeTab === item.id ? 'primary.dark' : 'action.hover',
+                  backgroundColor:
+                    activeTab === item.id ? 'primary.dark' : 'action.hover',
                 },
               }}
             >
@@ -94,7 +129,7 @@ export default function Layout({ children, activeTab, onTabChange }: LayoutProps
                 primary={item.label}
                 primaryTypographyProps={{
                   fontSize: '0.9rem',
-                  fontWeight: activeTab === item.id ? 600 : 400
+                  fontWeight: activeTab === item.id ? 600 : 400,
                 }}
               />
             </ListItemButton>
@@ -117,19 +152,36 @@ export default function Layout({ children, activeTab, onTabChange }: LayoutProps
           borderBottom: '1px solid #e0e0e0',
         }}
       >
-        <Toolbar>
-          <IconButton
-            color="primary"
-            aria-label="open drawer"
-            edge="start"
-            onClick={handleDrawerToggle}
-            sx={{ mr: 2, display: { md: 'none' } }}
-          >
-            <MenuIcon />
-          </IconButton>
-          <Typography variant="h6" sx={{ color: 'text.primary', fontWeight: 500 }}>
-            {menuItems.find(item => item.id === activeTab)?.label}
-          </Typography>
+        <Toolbar sx={{ display: 'flex', justifyContent: 'space-between' }}>
+          <Box sx={{ display: 'flex', alignItems: 'center' }}>
+            <IconButton
+              color="primary"
+              aria-label="open drawer"
+              edge="start"
+              onClick={handleDrawerToggle}
+              sx={{ mr: 2, display: { md: 'none' } }}
+            >
+              <MenuIcon />
+            </IconButton>
+            <Typography variant="h6" sx={{ color: 'text.primary', fontWeight: 500 }}>
+              {menuItems.find((item) => item.id === activeTab)?.label}
+            </Typography>
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {userName && (
+              <Typography variant="body2" sx={{ color: 'text.primary', mr: 1 }}>
+                Hi, {userName}
+              </Typography>
+            )}
+            <Button
+              color="error"
+              startIcon={<LogoutIcon />}
+              onClick={handleLogout}
+              sx={{ borderRadius: 2 }}
+            >
+              Logout
+            </Button>
+          </Box>
         </Toolbar>
       </AppBar>
       <Box

@@ -194,6 +194,13 @@ export default function AttendanceView() {
           </Typography> */}
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
+          <Tooltip title="Refresh">
+            <span>
+              <IconButton onClick={() => fetchAll()} disabled={loading} size="small">
+                <RefreshIcon />
+              </IconButton>
+            </span>
+          </Tooltip>
           <FormControlLabel
             control={<Switch checked={includeAbsentees} onChange={(_, v) => setIncludeAbsentees(v)} />}
             label="Include absentees"

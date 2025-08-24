@@ -15,6 +15,7 @@
     "@mui/material": "^7.3.1",
     "@mui/x-charts": "^8.10.1",
     "@mui/x-data-grid": "^8.10.1",
+    "@supabase/auth-helpers-nextjs": "^0.10.0",
     "@supabase/supabase-js": "^2.56.0",
     "axios": "^1.11.0",
     "date-fns": "^4.1.0",

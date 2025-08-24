@@ -14,12 +14,8 @@ import {
   Visibility as VisibilityIcon,
   AccessTime as TimeIcon
 } from '@mui/icons-material';
-import { Socket } from 'socket.io-client';
-
-interface UnknownFacesProps {
-  socket: Socket | null;
-  isConnected: boolean;
-}
+// WebSockets removed — component shows latest unknowns fetched on mount
+interface UnknownFacesProps { }
 
 type UnknownRow = {
   attendance: {
@@ -49,7 +45,7 @@ function fmt(iso?: string | null) {
   try { return new Date(iso).toLocaleString(); } catch { return '-'; }
 }
 
-export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps) {
+export default function UnknownFaces(_: UnknownFacesProps) {
   const [rows, setRows] = useState<UnknownRow[]>([]);
   const [loading, setLoading] = useState(false);
   const [selected, setSelected] = useState<UnknownRow | null>(null);
@@ -72,12 +68,8 @@ export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps)
 
   useEffect(() => {
     fetchUnknowns();
-    // Optional: live update via socket
-    if (!socket) return;
-    const handler = () => fetchUnknowns();
-    socket.on('unknown-updated', handler);
-    return () => { socket.off('unknown-updated', handler); };
-  }, [socket]);
+    // No socket events — rely on manual refresh or background polling
+  }, []);
 
   const handleEnrollOpen = (row: UnknownRow) => {
     setSelected(row);
@@ -92,8 +84,8 @@ export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps)
   };
 
   const handleEnrollStudent = async () => {
-    // Minimal stub: open your standard enrollment flow (file upload).
-    // If you want: implement /enroll_from_url backend that downloads selected.attendance.snapshot_url and enrolls.
+    // Stub: you can implement /enroll_from_url backend to convert snapshot_url -> student
+    // or redirect to your standard Enrollment page with the snapshot URL prefilled.
     console.log('Enroll unknown using snapshot:', selected?.attendance.snapshot_url, { studentName, studentId });
     handleEnrollClose();
   };
@@ -118,7 +110,7 @@ export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps)
           <Badge badgeContent={count} color="error">
             <Chip
               icon={<TimeIcon />}
-              label={isConnected ? 'Live Monitoring' : 'Offline'}
+              label={'Monitoring'}
               sx={{ bgcolor: 'white', color: 'warning.main', fontWeight: 'bold' }}
             />
           </Badge>
@@ -175,7 +167,11 @@ export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps)
                         </Typography>
 
                         <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, mb: 2 }}>
-                          <Chip size="small" label={row.attendance.status === 'checked-in' ? 'Checked In' : 'Checked Out'} color={row.attendance.status === 'checked-in' ? 'success' : 'warning'} />
+                          <Chip
+                            size="small"
+                            label={row.attendance.status === 'checked-in' ? 'Checked In' : 'Checked Out'}
+                            color={row.attendance.status === 'checked-in' ? 'success' : 'warning'}
+                          />
                           <Typography variant="body2" color="text.secondary">
                             IN: {fmt(row.attendance.check_in_at)} | OUT: {fmt(row.attendance.check_out_at)}
                           </Typography>
@@ -194,7 +190,11 @@ export default function UnknownFaces({ socket, isConnected }: UnknownFacesProps)
                           >
                             Enroll
                           </Button>
-                          <IconButton size="small" color="primary" onClick={() => img && window.open(img, '_blank')}>
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            onClick={() => img && window.open(img, '_blank')}
+                          >
                             <VisibilityIcon />
                           </IconButton>
                         </Box>

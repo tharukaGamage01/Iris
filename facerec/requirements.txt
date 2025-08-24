@@ -7,3 +7,9 @@ python-dotenv
 psycopg[binary]
 pydantic
 scikit-learn
+setuptools
+cmake 
+dlib 
+git+https://github.com/ageitgey/face_recognition_models
+face_recognition 
+

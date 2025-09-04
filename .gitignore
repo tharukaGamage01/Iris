@@ -49,13 +49,6 @@ package-lock.json
 yarn.lock
 .next/
 
-# Models and large files
-*.onnx
-*.h5
-*.pkl
-models/
-facerec/models/
-
 # Static/media uploads
 uploads/
 media/

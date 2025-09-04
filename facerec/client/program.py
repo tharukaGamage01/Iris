@@ -40,10 +40,9 @@ MIN_BOX_SIZE   = int(os.getenv("MIN_BOX_SIZE", "40"))  # pixels on original fram
 TIME_FMT    = "%H:%M:%S"
 
 # Presence / anti-flap
-APPEAR_SUSTAIN_SEC = float(os.getenv("APPEAR_SUSTAIN_SEC", "0.8"))  # must be seen this long to check-in
-ABSENCE_GRACE_SEC  = float(os.getenv("ABSENCE_GRACE_SEC", "2.0"))   # must be gone this long to check-out
-EVENT_DEBOUNCE_SEC = float(os.getenv("EVENT_DEBOUNCE_SEC", "3.0"))  # min time between two toggles for same person
-MIN_SESSION_SEC    = float(os.getenv("MIN_SESSION_SEC", "15.0"))    # min time from check-in to check-out (per person)
+APPEAR_SUSTAIN_SEC = float(os.getenv("APPEAR_SUSTAIN_SEC", "2.0"))  # must be seen this long to toggle status
+EVENT_DEBOUNCE_SEC = float(os.getenv("EVENT_DEBOUNCE_SEC", "5.0"))  # min time between toggles for same person
+DETECTION_COOLDOWN_SEC = float(os.getenv("DETECTION_COOLDOWN_SEC", "3.0"))  # cooldown after each toggle
 
 # Supabase
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -180,8 +179,25 @@ def _toggle_attendance_for_today_direct(sb: Client, student_id: str, when: datet
 # Unknown handling (fingerprint + snapshots)
 # =========================
 def encoding_fingerprint(enc: np.ndarray) -> str:
-    v = np.round(enc.astype(np.float32), 2)
-    return hashlib.sha1(v.tobytes()).hexdigest()
+    """
+    Create a more robust fingerprint for face encodings.
+    This uses a combination of rounded values and statistical measures
+    to create a stable identifier for unknown faces.
+    """
+    # Round to reduce noise but maintain uniqueness
+    rounded = np.round(enc.astype(np.float32), 3)
+    
+    # Use statistical measures for more stability
+    mean_val = np.mean(rounded)
+    std_val = np.std(rounded)
+    
+    # Combine raw encoding with statistics
+    combined = np.concatenate([
+        rounded,
+        [mean_val, std_val]
+    ])
+    
+    return hashlib.sha256(combined.tobytes()).hexdigest()[:16]  # Use first 16 chars
 
 def _crop_face_bgr(frame_bgr: np.ndarray, box: Tuple[int,int,int,int], pad: int = 10) -> np.ndarray:
     top, right, bottom, left = box
@@ -381,29 +397,17 @@ def decide_identity(enc, identities, known_faces, centroids):
 # =========================
 @dataclass
 class PresenceState:
-    present: bool = False
-    first_seen_ts: float = 0.0     # first time we started seeing (entering window)
+    first_seen_ts: float = 0.0     # first time we started seeing in current detection window
     last_seen_ts: float = 0.0      # last frame we saw this face
-    entered_at: float = 0.0        # when check-in fired
-    last_toggle_at: float = 0.0    # last time we toggled (in/out)
-    missing_since: float = 0.0     # first time we noticed disappearance
+    last_toggle_at: float = 0.0    # last time we toggled attendance
+    consecutive_detections: int = 0   # consecutive frames detected
+    in_cooldown: bool = False      # whether we're in cooldown period after toggle
 
 presence_known: Dict[str, PresenceState] = {}      # key: canonical known name
-presence_unknown: Dict[str, PresenceState] = {}    # key: unknown fingerprint
-_last_event_at: Dict[str, float] = {}              # global debounce per entity
-
-def _debounced(key: str) -> bool:
-    now = time.time()
-    last = _last_event_at.get(key, 0.0)
-    if now - last < EVENT_DEBOUNCE_SEC:
-        return False
-    _last_event_at[key] = now
-    return True
+presence_unknown: Dict[str, PresenceState] = {}    # key: unknown fingerprint              # global debounce per entity
 
 def notify_seen_known(name: str) -> Tuple[bool, Optional[str]]:
     """Toggle attendance for a known person."""
-    if not _debounced(f"known:{name}"):
-        return False, None
     try:
         sb = init_supabase()
         stu = _get_student(sb, external_id=None, name=name)
@@ -418,9 +422,7 @@ def notify_seen_known(name: str) -> Tuple[bool, Optional[str]]:
         return False, None
 
 def notify_seen_unknown(fingerprint: str, frame_bgr: np.ndarray, box: Optional[Tuple[int,int,int,int]]) -> Tuple[bool, Optional[str]]:
-    """Toggle attendance for an unknown person, uploading a snapshot on entry; on exit box may be None."""
-    if not _debounced(f"unknown:{fingerprint}"):
-        return False, None
+    """Toggle attendance for an unknown person, uploading a snapshot."""
     try:
         sb = init_supabase()
         snapshot_url: Optional[str] = None
@@ -522,10 +524,10 @@ def main():
                     fp = encoding_fingerprint(enc)
                     seen_unknown_this_frame.append((fp, (top, right, bottom, left)))
 
-            # ---------- presence state machine ----------
+            # ---------- presence state machine (simple toggle logic) ----------
             now_ts = time.time()
 
-            # KNOWN: seen → possible CHECK-IN
+            # KNOWN: Toggle attendance when face appears for sustained time
             for name in seen_known_this_frame:
                 st = presence_known.get(name)
                 if st is None:
@@ -533,94 +535,86 @@ def main():
                     presence_known[name] = st
 
                 st.last_seen_ts = now_ts
-                st.missing_since = 0.0  # we currently see them
+                st.consecutive_detections += 1
 
-                if not st.present:
-                    # entering window
-                    if st.first_seen_ts == 0.0:
-                        st.first_seen_ts = now_ts
+                # Start detection window if not started
+                if st.first_seen_ts == 0.0:
+                    st.first_seen_ts = now_ts
 
-                    if (now_ts - st.first_seen_ts) >= APPEAR_SUSTAIN_SEC and (now_ts - st.last_toggle_at) >= EVENT_DEBOUNCE_SEC:
-                        ok, status = notify_seen_known(name)   # writes to DB
-                        if ok:
-                            st.present = True
-                            st.entered_at = now_ts
-                            st.last_toggle_at = now_ts
-                            ln.writerow([name, datetime.now().strftime(TIME_FMT), status or 'checked-in'])
-                            print(f"[ATTENDANCE] {name} -> {status or 'checked-in'}")
+                # Check if we should toggle attendance
+                sustained_time = now_ts - st.first_seen_ts
+                since_last_toggle = now_ts - st.last_toggle_at
+                
+                # Toggle if: sustained detection + enough time since last toggle + not in cooldown
+                if (sustained_time >= APPEAR_SUSTAIN_SEC and 
+                    since_last_toggle >= EVENT_DEBOUNCE_SEC and
+                    st.consecutive_detections >= 3 and
+                    not st.in_cooldown):
+                    
+                    ok, status = notify_seen_known(name)
+                    if ok:
+                        st.last_toggle_at = now_ts
+                        st.in_cooldown = True
+                        st.first_seen_ts = 0.0  # Reset detection window
+                        st.consecutive_detections = 0
+                        ln.writerow([name, datetime.now().strftime(TIME_FMT), status or 'toggled'])
+                        print(f"[ATTENDANCE] {name} -> {status or 'toggled'}")
 
-            # KNOWN: not seen → possible CHECK-OUT
+            # KNOWN: Reset state for people not seen this frame
             for name, st in list(presence_known.items()):
-                if st.present:
-                    if name not in seen_known_this_frame:
-                        if st.missing_since == 0.0:
-                            st.missing_since = now_ts
-
-                        if (now_ts - st.missing_since) >= ABSENCE_GRACE_SEC \
-                           and (now_ts - st.entered_at) >= MIN_SESSION_SEC \
-                           and (now_ts - st.last_toggle_at) >= EVENT_DEBOUNCE_SEC:
-                            ok, status = notify_seen_known(name)
-                            if ok:
-                                st.present = False
-                                st.first_seen_ts = 0.0
-                                st.entered_at = 0.0
-                                st.last_toggle_at = now_ts
-                                st.missing_since = 0.0
-                                ln.writerow([name, datetime.now().strftime(TIME_FMT), status or 'checked-out'])
-                                print(f"[ATTENDANCE] {name} -> {status or 'checked-out'}")
-                    else:
-                        st.missing_since = 0.0
-                else:
-                    # clean stale pre-entry state
-                    if st.first_seen_ts and (now_ts - max(st.first_seen_ts, st.last_seen_ts)) > (ABSENCE_GRACE_SEC * 3):
+                if name not in seen_known_this_frame:
+                    st.consecutive_detections = 0
+                    # Exit cooldown after some time without detection
+                    if st.in_cooldown and (now_ts - st.last_toggle_at) >= DETECTION_COOLDOWN_SEC:
+                        st.in_cooldown = False
+                    # Clean up old states
+                    if st.last_seen_ts and (now_ts - st.last_seen_ts) > 30.0:
                         del presence_known[name]
 
-            # UNKNOWN: seen → possible CHECK-IN
+            # UNKNOWN: Toggle attendance when face appears for sustained time
+            unknown_fps_this_frame = set()
             for fp, box in seen_unknown_this_frame:
+                unknown_fps_this_frame.add(fp)
                 st = presence_unknown.get(fp)
                 if st is None:
                     st = PresenceState()
                     presence_unknown[fp] = st
 
                 st.last_seen_ts = now_ts
-                st.missing_since = 0.0
+                st.consecutive_detections += 1
 
-                if not st.present:
-                    if st.first_seen_ts == 0.0:
-                        st.first_seen_ts = now_ts
+                # Start detection window if not started
+                if st.first_seen_ts == 0.0:
+                    st.first_seen_ts = now_ts
 
-                    if (now_ts - st.first_seen_ts) >= APPEAR_SUSTAIN_SEC and (now_ts - st.last_toggle_at) >= EVENT_DEBOUNCE_SEC:
-                        ok, status = notify_seen_unknown(fp, frame, box)
-                        if ok:
-                            st.present = True
-                            st.entered_at = now_ts
-                            st.last_toggle_at = now_ts
-                            ln.writerow([f"unknown:{fp[:8]}", datetime.now().strftime(TIME_FMT), status or 'checked-in'])
-                            print(f"[UNKNOWN] {fp[:8]} -> {status or 'checked-in'}")
+                # Check if we should toggle attendance
+                sustained_time = now_ts - st.first_seen_ts
+                since_last_toggle = now_ts - st.last_toggle_at
+                
+                # Toggle if: sustained detection + enough time since last toggle + not in cooldown
+                if (sustained_time >= APPEAR_SUSTAIN_SEC and 
+                    since_last_toggle >= EVENT_DEBOUNCE_SEC and
+                    st.consecutive_detections >= 3 and
+                    not st.in_cooldown):
+                    
+                    ok, status = notify_seen_unknown(fp, frame, box)
+                    if ok:
+                        st.last_toggle_at = now_ts
+                        st.in_cooldown = True
+                        st.first_seen_ts = 0.0  # Reset detection window
+                        st.consecutive_detections = 0
+                        ln.writerow([f"unknown:{fp[:8]}", datetime.now().strftime(TIME_FMT), status or 'toggled'])
+                        print(f"[UNKNOWN] {fp[:8]} -> {status or 'toggled'}")
 
-            # UNKNOWN: not seen → possible CHECK-OUT
+            # UNKNOWN: Reset state for people not seen this frame
             for fp, st in list(presence_unknown.items()):
-                if st.present:
-                    if all(fp != fp2 for fp2, _ in seen_unknown_this_frame):
-                        if st.missing_since == 0.0:
-                            st.missing_since = now_ts
-
-                        if (now_ts - st.missing_since) >= ABSENCE_GRACE_SEC \
-                           and (now_ts - st.entered_at) >= MIN_SESSION_SEC \
-                           and (now_ts - st.last_toggle_at) >= EVENT_DEBOUNCE_SEC:
-                            ok, status = notify_seen_unknown(fp, frame, None)  # no new snapshot on exit
-                            if ok:
-                                st.present = False
-                                st.first_seen_ts = 0.0
-                                st.entered_at = 0.0
-                                st.last_toggle_at = now_ts
-                                st.missing_since = 0.0
-                                ln.writerow([f"unknown:{fp[:8]}", datetime.now().strftime(TIME_FMT), status or 'checked-out'])
-                                print(f"[UNKNOWN] {fp[:8]} -> {status or 'checked-out'}")
-                    else:
-                        st.missing_since = 0.0
-                else:
-                    if st.first_seen_ts and (now_ts - max(st.first_seen_ts, st.last_seen_ts)) > (ABSENCE_GRACE_SEC * 3):
+                if fp not in unknown_fps_this_frame:
+                    st.consecutive_detections = 0
+                    # Exit cooldown after some time without detection
+                    if st.in_cooldown and (now_ts - st.last_toggle_at) >= DETECTION_COOLDOWN_SEC:
+                        st.in_cooldown = False
+                    # Clean up old states
+                    if st.last_seen_ts and (now_ts - st.last_seen_ts) > 30.0:
                         del presence_unknown[fp]
 
             # ---------- draw overlays ----------

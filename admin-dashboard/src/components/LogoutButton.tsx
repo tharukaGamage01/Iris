@@ -2,14 +2,15 @@
 'use client';
 
 import { Button } from '@mui/material';
-import { supabase } from '@/lib/supabaseClient';
 import { useRouter } from 'next/navigation';
 
 export default function LogoutButton() {
     const router = useRouter();
 
     const signOut = async () => {
-        await supabase.auth.signOut();
+        if (typeof window !== 'undefined') {
+            localStorage.removeItem('user-session');
+        }
         router.replace('/auth/login');
     };
 

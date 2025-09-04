@@ -1,0 +1,72 @@
+# Python
+__pycache__/
+*.py[cod]
+*.so
+*.egg-info/
+.eggs/
+.python-version
+venv/
+venv/*
+.env
+.env.*
+.env.local
+.venv/
+.pytest_cache/
+.pytype/
+coverage.xml
+htmlcov/
+dist/
+build/
+*.egg
+*.wheel
+
+# PyCharm / JetBrains
+.idea/
+
+# VSCode
+.vscode/
+
+# macOS
+.DS_Store
+
+# Logs
+*.log
+server.log
+camera.log
+uvicorn.log
+
+# SQLite / DB files
+*.db
+*.sqlite3
+
+# Node / Next.js
+node_modules/
+admin-dashboard/node_modules/
+admin-dashboard/.next/
+admin-dashboard/.env.local
+pnpm-lock.yaml
+package-lock.json
+yarn.lock
+.next/
+
+# Models and large files
+*.onnx
+*.h5
+*.pkl
+models/
+facerec/models/
+
+# Static/media uploads
+uploads/
+media/
+
+# Misc
+*.pem
+*.key
+
+# Ignore secrets accidentally added
+secrets.json
+
+# Images folder used for test data (uncomment if you want to track sample images)
+# photos/
+# img/
